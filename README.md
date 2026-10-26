@@ -7,6 +7,10 @@ search and play videos from one website.
 
 My addition is an **Internet Archive provider**. It is open as a pull request
 upstream: [Zenda-Cross/vega-providers#36](https://github.com/Zenda-Cross/vega-providers/pull/36).
+Subtitles and the sort setting are on the follow-up branch
+[`feat/internet-archive-subtitles`](https://github.com/Tanzeel0Hussain/zenda-vega-providers/tree/feat/internet-archive-subtitles).
+The same provider is also published on its own in
+[Tanzeel0Hussain/vega-providers](https://github.com/Tanzeel0Hussain/vega-providers).
 
 ## Internet Archive provider
 
@@ -21,34 +25,41 @@ What it does:
 - **Genres:** Drama, Comedy, Horror, Western, Mystery, Romance, War, Film Noir
   and Science Fiction.
 - **Search** across the whole video collection.
-- **Details page** with title, description, poster, and the year and subjects
-  as tags.
+- **Details page** with title, description, poster, the year and subjects as
+  tags, and the IMDb ID when the item has one.
 - **Playback** of the original video files (MP4 and others). An item with
   several versions of one film (different qualities) is shown as one movie
   with a choice of quality, not as a series.
-- **License setting:** in Vega's Provider Manager you can choose "Public
-  domain and Creative Commons" (default) or "Public domain only".
+- **Subtitles:** SRT and WebVTT files in an item show up in the player,
+  named by language; Internet Archive's own speech-recognition captions are
+  labelled "Automatic captions".
+- **Settings:** in Vega's Provider Manager choose "Public domain and Creative
+  Commons" (default) or "Public domain only", and sort lists by most popular,
+  recently added or highest rated.
 
 It uses the official Internet Archive search and metadata APIs, not page
 scraping, so it does not break when the website's layout changes.
 
 ## Use it in the Vega app
 
-Until the pull request is merged, add this fork as a provider source:
+The easiest way, with the newest version (subtitles included):
 
 1. Open Vega and go to **Settings → Provider Manager**.
 2. Tap **Add provider source** (the + button).
-3. Paste this link and confirm:
-
-   ```
-   https://github.com/Tanzeel0Hussain/zenda-vega-providers/tree/feat/internet-archive-provider
-   ```
-
+3. Type `Tanzeel0Hussain` and confirm. Vega then loads
+   [Tanzeel0Hussain/vega-providers](https://github.com/Tanzeel0Hussain/vega-providers).
 4. Install **Internet Archive** from the list and select it as the provider.
 
-The icon may be blank for now: the manifest points to the icon's final
+To try exactly what is in the upstream pull request instead, paste this link
+in step 3:
+
+```
+https://github.com/Tanzeel0Hussain/zenda-vega-providers/tree/feat/internet-archive-provider
+```
+
+That version's icon may be blank: its manifest points to the icon's final
 location in the upstream repo. After the pull request is merged, the provider
-comes with the default source and you can remove this one.
+comes with the default source.
 
 ## Run and test it on a computer
 
