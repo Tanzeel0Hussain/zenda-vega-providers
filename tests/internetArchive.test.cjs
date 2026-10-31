@@ -9,7 +9,7 @@ function load(entry) {
   const code = buildSync({ entryPoints: [entry], bundle: true, platform: "browser", format: "cjs", write: false })
     .outputFiles[0].text;
   const module = { exports: {} };
-  vm.runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, Error, Promise, console });
+  vm.runInNewContext(code, { module, exports: module.exports, URL, URLSearchParams, Error, Promise, console, setTimeout });
   return module.exports;
 }
 
@@ -19,7 +19,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 
 const api = load("providers/internetArchive/api.ts");
 const { getStream } = load("providers/internetArchive/stream.ts");
-const { getPosts } = load("providers/internetArchive/posts.ts");
+const { getPosts, getSearchPosts } = load("providers/internetArchive/posts.ts");
 const { getSettingsSchema } = load("providers/internetArchive/settings.ts");
 const { getMeta } = load("providers/internetArchive/meta.ts");
 
@@ -169,4 +169,84 @@ test("episode links from getMeta find their own subtitles, even with % and space
     assert.equal(stream.subtitles.length, 1);
     assert.equal(decodeURIComponent(new URL(stream.subtitles[0].uri).pathname), `/download/show/${base}.en.srt`);
   }
+});
+
+test("search covers the credited people, not only the title", async () => {
+  // Only 22 films are titled "Buster Keaton"; 94 credit him.
+  const search = { response: { docs: [{ identifier: "carmen", title: "Carmen", year: "1915" }] } };
+  const c = context({ "advancedsearch.php": search });
+  const posts = await getSearchPosts({ searchQuery: "Buster Keaton", page: 1, providerContext: c.ctx });
+  assert.equal(posts.length, 1);
+  const query = new URL(c.calls[0]).searchParams.get("q");
+  assert.equal(
+    query,
+    "(title:(Buster Keaton) OR creator:(Buster Keaton)) AND mediatype:movies AND " +
+      "licenseurl:(*publicdomain* OR *creativecommons*)",
+  );
+});
+
+test("credits, length and language reach the details page", async () => {
+  const item = {
+    metadata: {
+      title: "Dracula",
+      year: "1931",
+      cast: [{ "@type": "Person", value: "Bela Lugosi" }, "Helen Chandler"],
+      performer: "Dwight Frye",
+      director: "Tod Browning",
+      runtime: "74 min.",
+      language: ["English", "Spanish"],
+      subject: "Horror; Vampire films",
+      creator: "some-uploader",
+    },
+    files: [{ name: "dracula.mp4", source: "original" }],
+  };
+  const c = context({ "/metadata/dracula": item });
+  const meta = await getMeta({ link: "dracula", providerContext: c.ctx });
+  // "creator" is the uploader account, so it never joins the credits.
+  assert.deepEqual(plain(meta.cast), ["Bela Lugosi", "Helen Chandler", "Dwight Frye", "Tod Browning"]);
+  assert.deepEqual(plain(meta.tags), ["1931", "74 min.", "English", "Horror", "Vampire films"]);
+});
+
+test("an item with no credits gets an empty cast", async () => {
+  const item = { metadata: { title: "Silent Reel" }, files: [{ name: "silent.mp4" }] };
+  const c = context({ "/metadata/silent": item });
+  const meta = await getMeta({ link: "silent", providerContext: c.ctx });
+  assert.deepEqual(plain(meta.cast), []);
+  assert.deepEqual(plain(meta.tags), []);
+});
+
+test("a busy archive.org shard is asked again", async () => {
+  // Seen live while browsing this provider: advancedsearch answers 502 now and
+  // then, which would otherwise leave a home row empty.
+  let calls = 0;
+  const ctx = {
+    commonHeaders: {},
+    kvStore: { get: async () => undefined },
+    axios: {
+      get: async () => {
+        calls++;
+        if (calls < 3) throw Object.assign(Error("Bad gateway"), { response: { status: 502 } });
+        return { data: { response: { docs: [{ identifier: "a", title: "A" }] } } };
+      },
+    },
+  };
+  const posts = await getPosts({ filter: "collection:prelinger", page: 1, providerContext: ctx });
+  assert.equal(posts[0].link, "a");
+  assert.equal(calls, 3);
+});
+
+test("a missing item is not asked for again", async () => {
+  let calls = 0;
+  const ctx = {
+    commonHeaders: {},
+    kvStore: { get: async () => undefined },
+    axios: {
+      get: async () => {
+        calls++;
+        throw Object.assign(Error("Not found"), { response: { status: 404 } });
+      },
+    },
+  };
+  await assert.rejects(() => getStream({ link: "gone", type: "movie", providerContext: ctx }));
+  assert.equal(calls, 1);
 });

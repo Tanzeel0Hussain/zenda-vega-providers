@@ -1,5 +1,6 @@
 import { Info, Link, ProviderContext } from "../types";
 import {
+  allValues,
   fetchItem,
   firstValue,
   groupVideos,
@@ -40,12 +41,19 @@ export const getMeta = async function ({
 
   const title = firstValue(metadata.title) || identifier;
   const year = firstValue(metadata.year) || firstValue(metadata.date).slice(0, 4);
-  const subjects: string[] = (
-    Array.isArray(metadata.subject) ? metadata.subject : [firstValue(metadata.subject)]
-  )
-    .flatMap((s: string) => String(s).split(";"))
-    .map((s: string) => s.trim())
+  const subjects = allValues(metadata.subject)
+    .flatMap((s) => s.split(";"))
+    .map((s) => s.trim())
     .filter(Boolean);
+  // "creator" is the uploader, not a credit. A recorded cast is rare here, so
+  // the director fills the credits line instead of leaving it empty.
+  const cast = [
+    ...new Set([
+      ...allValues(metadata.cast),
+      ...allValues(metadata.performer),
+      ...allValues(metadata.director),
+    ]),
+  ].slice(0, 10);
   const imdbId =
     JSON.stringify([metadata["external-identifier"], metadata.imdb]).match(/tt\d{7,}/)?.[0] || "";
 
@@ -83,7 +91,15 @@ export const getMeta = async function ({
     image: imageUrl(identifier),
     imdbId,
     type: isSeries ? "series" : "movie",
-    tags: [year, ...subjects].filter(Boolean).slice(0, 6),
+    cast,
+    tags: [
+      year,
+      firstValue(metadata.runtime).trim(),
+      firstValue(metadata.language).trim(),
+      ...subjects,
+    ]
+      .filter(Boolean)
+      .slice(0, 6),
     linkList,
     webUrl: `${IA_BASE}/details/${encodeURIComponent(identifier)}`,
   };

@@ -88,14 +88,42 @@ export const parseLink = (
   };
 };
 
+// archive.org answers these while a search or metadata shard is busy. A short
+// backoff keeps a home row from showing up empty for no fault of the user.
+const RETRY_STATUSES = [429, 500, 502, 503, 504];
+
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+export const iaGet = async (
+  providerContext: ProviderContext,
+  url: string,
+  signal?: AbortSignal,
+  attempts = 3,
+): Promise<any> => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await providerContext.axios.get(url, {
+        headers: providerContext.commonHeaders,
+        signal,
+      });
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (attempt >= attempts - 1 || !RETRY_STATUSES.includes(status)) throw err;
+      await wait(300 * 2 ** attempt);
+    }
+  }
+};
+
 export const fetchItem = async (
   identifier: string,
   providerContext: ProviderContext,
   signal?: AbortSignal,
 ): Promise<ArchiveItem> => {
-  const res = await providerContext.axios.get(
+  const res = await iaGet(
+    providerContext,
     `${IA_BASE}/metadata/${encodeURIComponent(identifier)}`,
-    { headers: providerContext.commonHeaders, signal },
+    signal,
   );
   if (!res.data?.metadata) {
     throw new Error(`Internet Archive item not found: ${identifier}`);
@@ -108,6 +136,20 @@ export const firstValue = (value: unknown): string => {
   if (Array.isArray(value)) return String(value[0] ?? "");
   return value == null ? "" : String(value);
 };
+
+// Some fields are objects, e.g. creator: [{ "@type": "Person", value: "..." }].
+const asText = (value: unknown): string => {
+  if (value == null) return "";
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return String(record.value ?? record["@value"] ?? "");
+  }
+  return String(value);
+};
+
+// Every non-empty value of a metadata field, for the fields that list people.
+export const allValues = (value: unknown): string[] =>
+  (Array.isArray(value) ? value : [value]).map(asText).map((t) => t.trim()).filter(Boolean);
 
 export const isVideoFile = (file: ArchiveFile): boolean => {
   const name = file.name.toLowerCase();

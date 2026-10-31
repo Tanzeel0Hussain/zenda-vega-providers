@@ -4,6 +4,7 @@ import {
   firstValue,
   getLicenseFilter,
   getSortOrder,
+  iaGet,
   imageUrl,
   sanitizeQuery,
 } from "./api";
@@ -19,10 +20,7 @@ const searchItems = async (
     getSortOrder(providerContext),
   ]);
   const url = buildSearchUrl(`(${query}) AND mediatype:movies AND ${license}`, page, 24, sort);
-  const res = await providerContext.axios.get(url, {
-    headers: providerContext.commonHeaders,
-    signal,
-  });
+  const res = await iaGet(providerContext, url, signal);
   const docs: any[] = res.data?.response?.docs || [];
   return docs
     .filter((doc) => doc.identifier)
@@ -67,5 +65,6 @@ export const getSearchPosts = async function ({
 }): Promise<Post[]> {
   const words = sanitizeQuery(searchQuery);
   if (!words) return [];
-  return searchItems(`title:(${words})`, page, providerContext, signal);
+  // Searching by a person ("Buster Keaton") finds far more than title alone.
+  return searchItems(`title:(${words}) OR creator:(${words})`, page, providerContext, signal);
 };
