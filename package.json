@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "description": "providers for vega-app",
   "license": "ISC",
-  "author": "",
+  "author": "Tanzeel Hussain",
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
     "test": "node tests/test-providers.js",
+    "test:unit": "node --test tests/*.test.js tests/*.test.cjs",
+    "typecheck": "tsc --noEmit -p .",
     "test:provider": "node tests/test-provider.js",
     "build": "node build-bundled.js",
     "build:dev": "cross-env SKIP_MINIFY=true node build-bundled.js",
@@ -17,7 +19,8 @@
     "watch:dev": "nodemon --watch providers --ext ts --exec \"npm run build\" & npm run dev",
     "dev:auto": "concurrently \"nodemon --watch providers --ext ts --exec \\\"npm run build:dev\\\"\" \"npm run dev\"",
     "auto": "node auto-dev.js",
-    "start": "npm run build && npm run dev"
+    "start": "npm run build && npm run dev",
+    "check": "npm run typecheck && npm run build && npm run test:unit"
   },
   "devDependencies": {
     "@types/cheerio": "^0.22.35",

@@ -151,7 +151,7 @@ export async function getStream({
       pageHtml = res.data;
     } catch (e: any) {
       if (e.response?.status === 403 && providerContext.openWebView) {
-        const cleanHeaders = { ...commonHeaders, Referer: baseUrl };
+        const cleanHeaders: Record<string, string> = { ...commonHeaders, Referer: baseUrl };
         delete cleanHeaders["User-Agent"];
         delete cleanHeaders["sec-ch-ua"];
         delete cleanHeaders["sec-ch-ua-mobile"];
@@ -206,7 +206,7 @@ export async function getStream({
             const dPageRes = await axios.get(href, { headers: commonHeaders, signal });
             dPageHtml = dPageRes.data;
           } catch (e: any) {
-            if (e.response?.status === 403 && providerContext.openWebView) {
+            if (e.response?.status === 403 && typeof providerContext.openWebView === "function") {
               const retryRes = await axios.get(href, { headers: commonHeaders, signal });
               dPageHtml = retryRes.data;
             }

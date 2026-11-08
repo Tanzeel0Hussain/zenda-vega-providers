@@ -61,7 +61,7 @@ async function getEmbeddedLinkWithWaf(
         await axios.get(url, {
           headers: {
             ...headers,
-            "User-Agent": wafResult.userAgent || headers["User-Agent"],
+            "User-Agent": wafResult.userAgent || (headers as Record<string, string>)["User-Agent"],
             Cookie: wafResult.cookies,
           },
         })

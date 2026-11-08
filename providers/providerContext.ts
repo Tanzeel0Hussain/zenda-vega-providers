@@ -1,145 +1,190 @@
-import axios from "axios";
-import { headers } from "./headers";
+import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from "axios";
 import * as cheerio from "cheerio";
-import { ProviderContext } from "./types";
 import cffi from "curl-cffi-node";
 import zlib from "zlib";
+import { headers } from "./headers";
+import { OpenWebViewOptions, OpenWebViewResult, ProviderContext, ProviderKvStore } from "./types";
 
-// Helper to decompress buffer based on headers
-function decompressBuffer(rawBuffer: Buffer, headers: any): Buffer {
-  let contentEncoding = "";
-  if (headers && typeof headers === "object") {
-    if (typeof headers.get === "function") {
-      contentEncoding = headers.get("content-encoding") || "";
-    } else {
-      contentEncoding = headers["content-encoding"] || headers["Content-Encoding"] || "";
-    }
-  }
+const IMPERSONATE_PROFILE = "chrome120";
+const DEFAULT_TIMEOUT_SECONDS = 30;
 
-  let decodedBuffer = rawBuffer;
-  if (contentEncoding) {
-    const enc = contentEncoding.toLowerCase();
-    try {
-      if (enc.includes('br')) {
-        decodedBuffer = zlib.brotliDecompressSync(rawBuffer);
-      } else if (enc.includes('gzip')) {
-        decodedBuffer = zlib.gunzipSync(rawBuffer);
-      } else if (enc.includes('deflate')) {
-        decodedBuffer = zlib.inflateSync(rawBuffer);
-      }
-    } catch (e) {
-      console.error("Decompression failed:", e);
-    }
+type HeaderBag = Record<string, unknown> | { get?: (name: string) => unknown } | undefined | null;
+
+const methodAliases: Record<string, string> = { delete: "del" };
+
+function readHeader(bag: HeaderBag, name: string): string {
+  if (!bag || typeof bag !== "object") return "";
+  const getter = (bag as { get?: (name: string) => unknown }).get;
+  if (typeof getter === "function") {
+    return String(getter.call(bag, name) ?? "");
   }
-  return decodedBuffer;
+  const record = bag as Record<string, unknown>;
+  const match = Object.keys(record).find((key) => key.toLowerCase() === name.toLowerCase());
+  return match ? String(record[match] ?? "") : "";
 }
 
-// 1. Hijack axios globally
-axios.defaults.adapter = async (config) => {
-  const method = (config.method || "get").toLowerCase();
-  const cffiFunc = (cffi as any)[method] || cffi.get;
-  
-  let url = config.url || "";
-  if (config.baseURL && !url.startsWith("http")) {
-     url = config.baseURL + url;
+function decompressBuffer(raw: Buffer, responseHeaders: HeaderBag): Buffer {
+  const encoding = readHeader(responseHeaders, "content-encoding").toLowerCase();
+  if (!encoding) return raw;
+  try {
+    if (encoding.includes("br")) return zlib.brotliDecompressSync(raw);
+    if (encoding.includes("gzip")) return zlib.gunzipSync(raw);
+    if (encoding.includes("deflate")) return zlib.inflateSync(raw);
+  } catch (error) {
+    console.error("Response decompression failed", error);
   }
-  
-  const reqHeaders: Record<string, string> = {};
-  if (config.headers) {
-    for (const [key, value] of Object.entries(config.headers)) {
-      if (key.toLowerCase() === "accept-encoding") continue; // let curl handle compression or server send plain
-      if (value !== undefined && value !== null) {
-        reqHeaders[key] = String(value);
-      }
-    }
+  return raw;
+}
+
+function sanitizeHeaders(input: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!input || typeof input !== "object") return result;
+  const source =
+    typeof Headers !== "undefined" && input instanceof Headers
+      ? Object.fromEntries((input as Headers).entries())
+      : (input as Record<string, unknown>);
+  for (const [key, value] of Object.entries(source)) {
+    if (key.toLowerCase() === "accept-encoding") continue;
+    if (value === undefined || value === null) continue;
+    result[key] = String(value);
   }
-  
-  const res = await cffiFunc(url, {
-    headers: reqHeaders,
-    data: config.data,
-    impersonate: "chrome120",
-    verify: false
-  });
-  
-  const rawBuffer = res.buffer();
-  const decodedBuffer = decompressBuffer(rawBuffer, res.headers);
-  
-  let data: any;
-  let contentType = "";
-  if (res.headers && typeof res.headers === "object") {
-     if (typeof (res.headers as any).get === "function") {
-         contentType = (res.headers as any).get("content-type") || "";
-     } else {
-         contentType = (res.headers as any)["content-type"] || (res.headers as any)["Content-Type"] || "";
-     }
+  return result;
+}
+
+function resolveSender(method: string) {
+  const normalized = method.toLowerCase();
+  const key = methodAliases[normalized] ?? normalized;
+  const sender = (cffi as unknown as Record<string, unknown>)[key];
+  return typeof sender === "function" ? (sender as typeof cffi.get) : cffi.get;
+}
+
+function resolveUrl(config: AxiosRequestConfig): string {
+  return axios.getUri(config);
+}
+
+function resolveTimeout(config: AxiosRequestConfig): number {
+  return config.timeout && config.timeout > 0
+    ? Math.ceil(config.timeout / 1000)
+    : DEFAULT_TIMEOUT_SECONDS;
+}
+
+function assertNotAborted(signal?: AbortSignal | null): void {
+  if (signal?.aborted) {
+    throw new AxiosError("Request aborted", AxiosError.ERR_CANCELED);
   }
-  
+}
+
+function parseBody(config: AxiosRequestConfig, buffer: Buffer, contentType: string): unknown {
   if (config.responseType === "arraybuffer" || config.responseType === "stream") {
-     data = decodedBuffer;
-  } else {
-     data = decodedBuffer.toString('utf8');
-     if (config.responseType === "json" || contentType.includes("application/json")) {
-        try { data = JSON.parse(data); } catch(e) {}
-     }
+    return buffer;
   }
-
-  return {
-    data: data,
-    status: res.status,
-    statusText: "OK",
-    headers: res.headers as any,
-    config: config,
-    request: {}
-  };
-};
-
-// 2. Hijack fetch globally
-const originalFetch = global.fetch;
-global.fetch = async (url: any, options: any = {}) => {
-  const method = (options.method || "get").toLowerCase();
-  const cffiFunc = (cffi as any)[method] || cffi.get;
-  
-  const reqHeaders: Record<string, string> = {};
-  if (options.headers) {
-    const headersObj = options.headers instanceof Headers ? Object.fromEntries((options.headers as any).entries()) : options.headers;
-    for (const [key, value] of Object.entries(headersObj)) {
-      if (key.toLowerCase() === "accept-encoding") continue;
-      if (value !== undefined && value !== null) {
-        reqHeaders[key] = String(value);
-      }
-    }
+  const text = buffer.toString("utf8");
+  const wantsJson = config.responseType === "json" || contentType.includes("application/json");
+  if (!wantsJson) return text;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
+}
 
-  const res = await cffiFunc(url.toString(), {
-    headers: reqHeaders,
-    data: options.body,
-    impersonate: "chrome120",
+axios.defaults.adapter = async (config): Promise<AxiosResponse> => {
+  assertNotAborted(config.signal as AbortSignal | undefined);
+
+  const send = resolveSender(config.method || "get");
+  const raw = await send(resolveUrl(config), {
+    headers: sanitizeHeaders(config.headers),
+    data: config.data,
+    impersonate: IMPERSONATE_PROFILE,
     verify: false,
-    allowRedirects: options.redirect === "manual" ? false : true,
+    timeout: resolveTimeout(config),
   });
-  
-  const rawBuffer = res.buffer();
-  const decodedBuffer = decompressBuffer(rawBuffer, res.headers);
-  const textContent = decodedBuffer.toString('utf8');
-  
-  return {
-    ok: res.status >= 200 && res.status < 300,
-    status: res.status,
-    url: res.url,
-    headers: {
-      get: (name: string) => (res.headers as any)[name.toLowerCase()],
-      has: (name: string) => !!(res.headers as any)[name.toLowerCase()],
-    },
-    text: () => Promise.resolve(textContent),
-    json: () => Promise.resolve(JSON.parse(textContent)),
-    buffer: () => Promise.resolve(decodedBuffer),
-    arrayBuffer: () => Promise.resolve(decodedBuffer.buffer),
-  } as any;
+
+  assertNotAborted(config.signal as AbortSignal | undefined);
+
+  const body = decompressBuffer(raw.buffer(), raw.headers as HeaderBag);
+  const contentType = readHeader(raw.headers as HeaderBag, "content-type");
+
+  const response: AxiosResponse = {
+    data: parseBody(config, body, contentType),
+    status: raw.status,
+    statusText: String(raw.status),
+    headers: raw.headers as any,
+    config: config as any,
+    request: {},
+  };
+
+  const accepted = config.validateStatus ? config.validateStatus(raw.status) : raw.status >= 200 && raw.status < 300;
+  if (!accepted) {
+    throw new AxiosError(
+      `Request failed with status code ${raw.status}`,
+      raw.status >= 500 ? AxiosError.ERR_BAD_RESPONSE : AxiosError.ERR_BAD_REQUEST,
+      config as any,
+      response.request,
+      response,
+    );
+  }
+  return response;
 };
+
+global.fetch = (async (input: any, init: any = {}) => {
+  assertNotAborted(init.signal);
+
+  const send = resolveSender(init.method || "get");
+  const raw = await send(String(input?.url ?? input), {
+    headers: sanitizeHeaders(init.headers),
+    data: init.body,
+    impersonate: IMPERSONATE_PROFILE,
+    verify: false,
+    followRedirects: init.redirect !== "manual",
+    timeout: DEFAULT_TIMEOUT_SECONDS,
+  });
+
+  const body = decompressBuffer(raw.buffer(), raw.headers as HeaderBag);
+  const text = body.toString("utf8");
+
+  return {
+    ok: raw.status >= 200 && raw.status < 300,
+    status: raw.status,
+    url: raw.url,
+    headers: {
+      get: (name: string) => readHeader(raw.headers as HeaderBag, name) || null,
+      has: (name: string) => readHeader(raw.headers as HeaderBag, name) !== "",
+    },
+    text: async () => text,
+    json: async () => JSON.parse(text),
+    buffer: async () => body,
+    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  } as unknown as Response;
+}) as typeof fetch;
+
+export function createKvStore(): ProviderKvStore {
+  const memory = new Map<string, unknown>();
+  return {
+    get: async <T = unknown>(key: string) => memory.get(key) as T | undefined,
+    set: async (key, value) => {
+      memory.set(key, value);
+    },
+    delete: async (key) => memory.delete(key),
+    keys: async () => Array.from(memory.keys()),
+    clear: async () => {
+      memory.clear();
+    },
+  };
+}
+
+export async function unsupportedWebView(
+  url: string,
+  _options?: OpenWebViewOptions,
+): Promise<OpenWebViewResult> {
+  throw new Error(`openWebView is not available in this runtime (requested ${url})`);
+}
 
 export const providerContext: ProviderContext = {
   axios,
-  Aes: null,
   commonHeaders: headers,
   cheerio,
+  openWebView: unsupportedWebView,
+  kvStore: createKvStore(),
+  getCookies: async () => ({}),
 };

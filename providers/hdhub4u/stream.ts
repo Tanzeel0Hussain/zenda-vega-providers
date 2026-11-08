@@ -1,4 +1,4 @@
-import { ProviderContext } from "../types";
+import { ProviderContext, Stream } from "../types";
 import { hubcloudExtractor } from "../extractors/hubcloud";
 import { throwProviderError } from "../providerErrors";
 
@@ -162,8 +162,8 @@ export async function getStream({
       const streams = [];
       for (const item of unique) {
         try {
-          const resolved = await getStream({link: item.link, type, signal, providerContext, isDownload});
-          streams.push(...resolved.map(stream => ({...stream, quality: stream.quality || String(qualityValue(item.quality)), server: item.quality + " · " + stream.server})));
+          const resolved: Stream[] = await getStream({link: item.link, type, signal, providerContext, isDownload});
+          streams.push(...resolved.map((stream: Stream) => ({...stream, quality: stream.quality || String(qualityValue(item.quality)), server: item.quality + " · " + stream.server})));
         } catch (error) {
           if (signal?.aborted) throw error;
           if (unique.length === 1) throw error;
